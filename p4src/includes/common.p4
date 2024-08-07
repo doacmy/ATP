@@ -24,6 +24,7 @@ blackbox stateful_alu cleaning_bitmap {
     update_lo_1_value   :  0;
 }
 
+// 疑问：此处的语句是否是并行执行的？
 blackbox stateful_alu read_write_bitmap {
     reg: bitmap;
 
@@ -60,6 +61,7 @@ blackbox stateful_alu check_app_id_and_seq {
     output_value           :  p4ml.appIDandSeqNum;
 }
 
+// 疑问：此处的两个条件会并行执行吗？返回的结果是什么？
 blackbox stateful_alu check_app_id_and_seq_resend {
     reg: appID_and_Seq;
 
@@ -73,14 +75,47 @@ blackbox stateful_alu check_app_id_and_seq_resend {
     output_value           :  register_lo;
 }
 
+
+// 黑盒有状态算术逻辑单元（stateful ALU），用于实现数据包处理过程中的状态管理和逻辑控制
+// blackbox 表示一个由硬件实现的模块，通常用来处理复杂的状态或逻辑
+// stateful 表示这个模块可以存储和更新状态信息，与无状态（stateless）处理不同，有状态处理允许设备在多个数据包处理之间保持某些信息
+// ALU 表示算术逻辑单元，通常用于执行算术或逻辑操作
+// 该特性为p4_14特有，在p4_16中可采用更加简洁的实现，如下所示
+
+/************************************************
+// 定义一个寄存器
+register<bit<32>>(1024) appID_and_Seq;
+
+// 控制逻辑
+control IngressControl {
+    apply {
+        bit<32> currentValue = appID_and_Seq.read(0);
+        if (hdr.p4ml.appIDandSeqNum == currentValue) {
+            appID_and_Seq.write(0, 0); // 满足条件时清零
+            mdata.isMyAppIDandMyCurrentSeq = hdr.p4ml.appIDandSeqNum;
+        }
+    }
+}
+*************************************************/
+
+
+// 判断输入的appID_and_Seq是否与p4ml.appIDandSeqNum相同
+// 若相同则将寄存器appID_and_Seq清零，并将p4ml.appIDandSeqNum复制到mdata.isMyAppIDandMyCurrentSeq中
 blackbox stateful_alu clean_app_id_and_seq {
+    // 设置该黑盒有状态算术逻辑单元中的状态寄存器reg为appID_and_Seq
+    // appID_and_Seq为交换机中定义的寄存器 -> registers.p4#17
+    // appID_and_Seq用于存储与应用程序ID和序列号相关的状态信息，可以跨多个数据包持久化状态信息
     reg: appID_and_Seq;
 
+    // 设置判断条件 condition_lo
+    // register_lo表示状态寄存器的低位信息
     condition_lo           :  p4ml.appIDandSeqNum == register_lo;
 
+    // 若条件成立，则将状态寄存器清零
     update_lo_1_predicate  :  condition_lo;
     update_lo_1_value      :  0;
 
+    // 若条件成立，则将p4ml.appIDandSeqNum赋值到mdata.isMyAppIDandMyCurrentSeq中
     output_predicate       :  condition_lo;
     output_dst             :  mdata.isMyAppIDandMyCurrentSeq;
     output_value           :  p4ml.appIDandSeqNum;
@@ -226,6 +261,8 @@ action check_ecn() {
 }
 
 action setup_ecn() {
+    // modify_field 是 P4 中用于修改数据包字段或元数据字段的指令
+    // 它可以用来设置或更新某个字段的值，以影响数据包的后续处理
     modify_field(mdata.is_ecn, 1);    
 }
 

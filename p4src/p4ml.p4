@@ -9,12 +9,19 @@
 #include "includes/actions.p4"
 #include "includes/common.p4"
 
+// grep -r -n "p4ml_meta_t" .
+// mdata -> parser.p4#3 -> headers.p4#138 
 field_list p4ml_resubmit_list{
 	mdata.agtr_time;	
 }
 
 action do_resubmit(){
+    // resubmit 是一个用于重新提交数据包的操作，它允许在数据包处理管道的某个阶段中将数据包重新提交到管道的起始位置，以便重新进行处理
+    // 例如，在更新了某些元数据或状态信息后，可能需要对数据包进行不同的处理，此时可以使用 resubmit 重新提交数据包以应用这些变化
+    // resubmit 可以指定保留的字段列表，以确保重新提交时某些重要信息不会丢失
+    // 在下面代码中，mdata.agtr_time 是需要保留的元数据字段；在重新提交数据包时，resubmit 会确保该字段的值被保留并传递到下一个处理周期
 	resubmit(p4ml_resubmit_list);
+    
 }
 
 table p4ml_resubmit{
@@ -25,56 +32,80 @@ table p4ml_resubmit{
 	size: 1;
 
 }
+
+// 这一块代码应该是p4_16中查表逻辑match-action部分
+// parser和deparser逻辑另写在其他文件中
+// 故阅读代码时应先查看parser.p4部分
 control ingress 
 {
-
+    // p4ml_entries为待聚合的梯度分片，其定义在 parser.p4#4 -> headers.p4#86
+    // 此处p4ml_entries的值来自 parser.p4#73
     if (valid(p4ml_entries)) {
 
+            // p4ml和ipv4由parser解析获得
+            // 若ecn有效，则告知交换机当前网络出现了拥塞
+            // common.p4#228
             if (ipv4.ecn == 3 or p4ml.ECN == 1) {
                 apply(setup_ecn_table);
             }
-            // ack packet
+            // 判断当前数据包是否为应答包
             if (p4ml.isACK == 1) {
-                
+                // p4ml.overflow用于指示交换机处的registor是否发生了浮点溢出
                 if (p4ml.overflow == 1 and p4ml.isResend == 0) {
 
                 } else {
+                    // 疑问：这里的逻辑看起来似乎是只能处理一个聚合任务？appID_and_Seq的赋值在 p4ml.p4#98 进行
+
+                    // 当前包为应答包，若寄存器appID_and_Seq中的值与p4ml_agtr_index.agtr相同，则表明聚合已经完成
+                    // 故应该释放寄存器appID_and_Seq，并将p4ml.appIDandSeqNum复制到mdata.isMyAppIDandMyCurrentSeq中
+                    // common.p4#443 -> common.p4#225 -> common.p4#102 
                     apply(clean_appID_and_seq_table);
                     
                     if (mdata.isMyAppIDandMyCurrentSeq != 0) {
-                        /* Clean */
-                        apply(clean_bitmap_table);
-                        apply(clean_ecn_table);
-                        apply(clean_agtr_time_table);
+                        /* Clean */   
+                        apply(clean_bitmap_table); // 将寄存器bitmap清零，common.p4#402 -> #207 -> #21
+                        apply(clean_ecn_table); // 将寄存器ecn_register清零，common.p4#393 -> #203 -> #15
+                        apply(clean_agtr_time_table); // 将寄存器agtr_time清零，common.p4#385 -> #199 -> #9
                         // apply(cleanEntry1);
                     }
                 }
 
                 /* Multicast Back */
+                // 疑问：resubmit_flag是1为假、0为真吗？
                 if(ig_intr_md.resubmit_flag == 1) {
-                    apply(multicast_table);
+                    // 疑问：控制面如何下发multicast_table中的表项
+                    apply(multicast_table); // common.p4#371
                 } else {
-                    apply(p4ml_resubmit);
+                    apply(p4ml_resubmit); //p4ml.p4#27
                 }
                 
             } else {
+                // 若数据包为梯度分片
 
                 if (p4ml.overflow == 1) {
-                    apply(outPort_table);
+                    // 疑问：此处的overflow是由谁标记的？
+                    apply(outPort_table);   // 对于已经溢出的梯度，则直接丢弃， common.p4#344
                 } else {
+                    // 若未发生浮点溢出
                     if (p4ml.isResend == 1) {
-                        apply(appID_and_seq_resend_table);
+                        // 若该梯度分片是重新发送的，并且属于当前appID_and_Seq寄存器记录的DT任务
+                        // 则清空appID_and_Seq，并将原先appID_and_Seq的值放入mdata.isMyAppIDandMyCurrentSeq中
+                        apply(appID_and_seq_resend_table);  // common.p4#436 -> #220 -> #63
                     } else {
-                        apply(appID_and_seq_table);
+                        // 若为初次收到的梯度分片
+                        // 若appID_and_Seq寄存器为空或则appID_and_Seq寄存器的值与p4ml.appIDandSeqNum相同
+                        // 则将appID_and_Seq寄存器和mdata.isMyAppIDandMyCurrentSeq的值置为p4ml.appIDandSeqNum
+                        apply(appID_and_seq_table); // common.p4#430 -> #216 -> #48
                     }
                     // Correct ID and Seq
                     if (mdata.isMyAppIDandMyCurrentSeq != 0) {
-                        
+                        // 若该梯度包确实属于当前交换机正在处理的DT任务
                         if (p4ml.isResend == 1) {
-                            // Clean the bitmap also
-                            apply(bitmap_resend_table);
+                            // 将bitmap寄存器中的值放入mdata.bitmap中，并清零
+                            apply(bitmap_resend_table); // commom.p4#304 -> #189 -> #37
                         } else {
-                            apply(bitmap_table);
+                            // 若为正常的梯度分片，则将寄存器bitmap中该分片对应的分量置为1，并将更新后的值赋予mdata.bitmap
+                            apply(bitmap_table); // common.p4#296 -> #185 -> #28
                         }
 
                         apply(ecn_register_table);

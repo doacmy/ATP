@@ -82,6 +82,8 @@ header_type bg_p4ml_t {
     }
 }
 
+// header_type 是用于定义数据包头部格式的一个关键字;
+// 它定义了数据包头部的结构，包括字段的名称、类型、长度和排列方式
 // 108Byte * 2
 header_type entry_t {
     fields {

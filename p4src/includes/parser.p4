@@ -20,7 +20,9 @@ header bg_p4ml_t     p4ml_bg;
  ***********************  P A R S E R  ***********************************
  *************************************************************************/
 
+// parser程序的执行入口
 parser start {
+    // ethernet -> parser.p4#6 -> headers.p4#7
     extract(ethernet);
     set_metadata(mdata.value_one, 1);   
     return select(ethernet.etherType) {
@@ -39,6 +41,7 @@ parser parse_ipv4 {
 }
 
 parser parse_p4ml {
+    // p4ml的定义在headers.p4#44
     extract(p4ml);
     return  select(p4ml.dataIndex) {
         0x0     : check_if_resubmit;
@@ -48,6 +51,7 @@ parser parse_p4ml {
 }
 
 parser check_if_resubmit {
+    // 此处ig_intr_md来源不明，可能是由交换机硬件自动维护的
     return  select(ig_intr_md.resubmit_flag) {
         // 0x0     : parse_p4ml_agtr_index;
         0x0     : use_first_p4ml_agtr_index_recirculate;

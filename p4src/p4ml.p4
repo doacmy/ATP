@@ -108,21 +108,28 @@ control ingress
                             apply(bitmap_table); // common.p4#296 -> #185 -> #28
                         }
 
-                        apply(ecn_register_table);
+                        // 若mdata中已经记录发生了拥塞，则将寄存器ecn_register置为1
+                        // 若交换机处已经记录出现拥塞，则将p4ml.ECN也置为1
+                        apply(ecn_register_table); // common.p4#490 -> #259 -> #166
                         
-                        apply(bitmap_aggregate_table);
+                        // 将当前梯度分片的到达情况更新到mdata.integrated_bitmap中
+                        apply(bitmap_aggregate_table);  // common.p4#313 -> #195
 
                         if (p4ml.isResend == 1) {
                             // Force forward and clean
                             apply(agtr_time_resend_table);
                         } else {
-                            apply(agtr_time_table);
+                            // 若可以进行聚合，则将agtr_time中的值加1,并更新到mdata.current_agtr_time中
+                            apply(agtr_time_table); // common.p4#124
                         }
 
                         // bitmap correct
                         if (mdata.isAggregate != 0) {
                             if (mdata.current_agtr_time == p4ml.agtr_time) {
-                                apply(noequ0_processEntry1andWriteToPacket);
+                                // 若寄存器register1中的值没有浮点溢出
+                                // 则将p4ml_entries.data0累加到寄存器register1中，并更新到p4ml_entries.data0中
+                                // tables.p4#41 -> actions.p4#13 -> registers.p4#282
+                                apply(noequ0_processEntry1andWriteToPacket);    
                                 apply(noequ0_processEntry2andWriteToPacket);
                                 apply(noequ0_processEntry3andWriteToPacket);
                                 apply(noequ0_processEntry4andWriteToPacket);
@@ -156,12 +163,17 @@ control ingress
                                 //apply(noequ0_processEntry32andWriteToPacket);
                                 // set output port
                                 // if(ig_intr_md.resubmit_flag == 1) {
-                                apply(modify_packet_bitmap_table);
-                                apply(outPort_table);
+                                // 使用mdata.integrated_bitmap更新梯度分片中的p4ml.bitmap
+                                apply(modify_packet_bitmap_table); // common.p4#455 -> #242
+                                apply(outPort_table); //common.p4#349 具体逻辑未知，应是用于设置egress出端口
                                 // } else {
                                     // apply(p4ml_resubmit);
                                 // }
                             } else {
+                                // 根据梯度分片是否是首次到达交换机选择处理逻辑
+                                // 可根据表processEntry1的逻辑选择（1）将p4ml_entries.data0赋值给寄存器register1
+                                // 或（2）将p4ml_entries.data0累加到寄存器register1中，并更新到p4ml_entries.data0中
+                                // tables.p4#2 -> actions.p4#1 -> registers.p4#257
                                 apply(processEntry1);
                                 apply(processEntry2);
                                 apply(processEntry3);
@@ -195,6 +207,7 @@ control ingress
                                 apply(processEntry31);
                                 //apply(processEntry32);
                                 
+                                // 疑问：resubmit到底是什么？
                                 if (ig_intr_md.resubmit_flag == 1) {
                                     apply(drop_table);
                                 } else {
@@ -204,7 +217,8 @@ control ingress
                             }
                         } else {
                             if (mdata.current_agtr_time == p4ml.agtr_time) {
-                                apply(Entry1WriteToPacket);
+                                // 将register1中值读取到p4ml_entries.data0中
+                                apply(Entry1WriteToPacket); // registers.p4#295
                                 apply(Entry2WriteToPacket);
                                 apply(Entry3WriteToPacket);
                                 apply(Entry4WriteToPacket);

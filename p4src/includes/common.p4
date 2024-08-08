@@ -194,7 +194,10 @@ action process_bitmap_resend() {
 
 action check_aggregate_and_forward() {
     // this is is for aggregation needed checking
+    // bit_andcb 是 P4_14 语言中常用的一个操作符，用于对两个数值（通常是寄存器或字段）进行按位“与”操作（bitwise AND），然后对结果取反
+    // bit_andcb(input1, input2, result)
     bit_andcb(mdata.isAggregate, p4ml.bitmap, mdata.bitmap);
+    // bit_or(destination, source1, source2);
     bit_or(mdata.integrated_bitmap, p4ml.bitmap, mdata.bitmap);
 }
 
